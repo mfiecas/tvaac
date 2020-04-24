@@ -1,3 +1,4 @@
+library(splines)
 library(nlme)
 library(MASS)
 
@@ -23,7 +24,7 @@ generateTruncatedBasis1<-function(n, knots,p=1){
 
 
 #computes time-varying activation and connectivity
-tvaac<-function(y,X,W=NULL,AR=1,tv=NULL, off.diag=NULL, n.knots=NULL,t.knots=NULL,power=1){
+tvaac<-function(y,X,W=NULL,AR=1,tv=NULL, off.diag="tv", n.knots=NULL,t.knots=NULL,power=1){
   #y=(n x 2) matrix
   #X=(n x p) matrix corresponding to the time-varying effects, currenty supports p=1 or 2
   #W=(n x q) matrix of adjusted covariates 
@@ -242,7 +243,7 @@ tvaac<-function(y,X,W=NULL,AR=1,tv=NULL, off.diag=NULL, n.knots=NULL,t.knots=NUL
   delta1<-resid1.y-predict(mod1.AR)
   delta2<-resid2.y-predict(mod2.AR)
   
-  Sigma.est<-cov(cbind(delta1,delta2))
+  Sigma.est<-cov(cbind(delta1,delta2))*(length(delta1)-1)/(length(delta1)-length(t.knots))
   
   
   phihat1.mat<-phihat2.mat<-matrix(NA, n-AR, AR)
@@ -369,7 +370,10 @@ boot.tvaac<-function(fit, sim.size=100, boot="parametric",seed=1131, pbar=TRUE){
   
   for (sim in 1:sim.size){
     tryCatch({
-      epsilon<-resid
+      epsilon=matrix(NA, nrow(resid), ncol(resid))
+      epsilon[1:AR,]=delta[sample(1:nrow(delta),AR, replace=T),]
+      
+      #      epsilon<-resid
       for (j in (AR+1):nrow(resid)){
         est<-c(0,0)
         for (ar in 1:AR){
@@ -382,11 +386,6 @@ boot.tvaac<-function(fit, sim.size=100, boot="parametric",seed=1131, pbar=TRUE){
         else if (boot=="parametric"){
           epsilon[j,]<-est+mvrnorm(1, c(0,0), covDelta)
         }
-      }
-      
-      epsilon.mean<-apply(epsilon,2,mean)
-      for (j in 1:nrow(epsilon)){
-        epsilon[j,]<-epsilon[j,]-epsilon.mean
       }
       
       y=cbind(pred.mod1, pred.mod2)+epsilon
@@ -415,30 +414,30 @@ boot.tvaac<-function(fit, sim.size=100, boot="parametric",seed=1131, pbar=TRUE){
   
 }
 
-
 #Computes the confidence interval of interest
-curve.conf.int<-function(fit.mat, method=NULL,conf.level=0.95){
-  if (is.null(method) || !method%in%c("interval", "band")){ 
-    print("method is set to confidence bands") 
-    method="band" 
+curve.conf.int<-function(fit.mat, conf.level=0.95){
+  ind.na<-which(!is.na(apply(fit.mat,2,sum)))
+  B=ncol(fit.mat)
+  fit.mat<-fit.mat[,ind.na]
+  sim.size<-ncol(fit.mat)
+  Time=nrow(fit.mat)
+  
+  dev<-rep(NA, sim.size)
+  fit<-apply(fit.mat,1,mean)
+  
+  fit.mat.copy<-fit.mat
+  for (j in 1:sim.size){
+    fit.mat.copy[,j]=abs(fit.mat.copy[,j]-fit)
   }
   
-  alpha<-1-conf.level
-  ind.na<-which(!is.na(apply(fit.mat,2,sum)))
-  fit.mat1<-fit.mat[,ind.na]
-  sim.size<-ncol(fit.mat1)
-  if (method=="interval"){
-    conf.int<-t(apply(fit.mat1, 1, quantile, probs=c(alpha/2, 1-alpha/2)))
+  for (time in 1:Time){
+    fit.mat.copy[time,]=fit.mat.copy[time,]/sd(fit.mat.copy[time,])
   }
-  else if (method=="band"){
-    dev<-rep(NA, sim.size)
-    fit<-apply(fit.mat1,1,mean)
-    for (j in 1:sim.size){
-      dev[j]<-sum( (fit-fit.mat1[,j])^2)
-    }
-    ind<-which(dev<quantile(dev, 0.95))
-    conf.int<-cbind(apply(fit.mat1[,ind],1,min), apply(fit.mat1[,ind],1,max))
-  }
+  
+  dev=apply(fit.mat.copy,2,max)
+  
+  ind<-which(dev<=quantile(dev, conf.level*sim.size/B))
+  conf.int<-cbind(apply(fit.mat[,ind],1,min), apply(fit.mat[,ind],1,max))
+  
   return(conf.int)
 }
-
